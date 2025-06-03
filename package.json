@@ -1,0 +1,41 @@
+{
+  "name": "mcp-integrated-search-server",
+  "version": "1.0.0",
+  "description": "Model Context Protocol (MCP) server for Google Custom Search and Redmine API integration",
+  "type": "commonjs",
+  "bin": {
+    "mcp-integrated-search-server": "./build/index.js"
+  },
+  "main": "./build/index.js",
+  "scripts": {
+    "build": "tsc && chmod +x build/index.js",
+    "start": "node build/index.js",
+    "dev": "tsc && node build/index.js",
+    "test": "npm run build && node test/test-server.mjs",
+    "test:verify": "npm run build && node test/verify-mcp-server.mjs",
+    "test:basic": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "mcp",
+    "google",
+    "custom-search",
+    "redmine",
+    "search",
+    "project-management"
+  ],
+  "author": "",
+  "license": "MIT",
+  "files": [
+    "build"
+  ],
+  "devDependencies": {
+    "@types/node": "^22.15.29",
+    "typescript": "^5.8.3"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "axios": "^1.9.0",
+    "dotenv": "^16.5.0",
+    "zod": "^3.25.49"
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "servers": {
+    "integrated-search-server": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["${workspaceFolder}/build/index.js"]
+    }
+  }
+}
