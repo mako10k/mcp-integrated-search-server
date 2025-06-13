@@ -10,10 +10,12 @@ A Model Context Protocol (MCP) server that provides both Google Custom Search AP
 - **Advanced Parameters**: Support for language restrictions, site-specific searches, file type filtering, and more
 
 ### Redmine API Integration
-- **Issue Management**: List, create, and view Redmine issues
+- **Issue Management**: List, create, view, and update Redmine issues
 - **Project Management**: Browse Redmine projects
 - **Advanced Filtering**: Filter issues by project, status, assignee, and more
 - **Comprehensive Details**: Access full issue information including custom fields
+- **Bulk Operations**: Update multiple issues simultaneously
+- **Progress Tracking**: Update issue progress, status, and assignment
 
 ### Common Features
 - **Error Handling**: Robust error handling with detailed error messages
@@ -119,9 +121,9 @@ Add the server to your Claude Desktop configuration:
 }
 ```
 
-### Available Tools
+### Available Tools (8 total)
 
-#### Google Search Tools
+#### Google Search Tools (2)
 
 #### 1. google_search
 
@@ -162,7 +164,7 @@ Find large photos of "sunset landscape"
 Search for clipart images of "business icons"
 ```
 
-#### Redmine API Tools
+#### Redmine API Tools (6)
 
 #### 3. redmine_list_issues
 
@@ -236,6 +238,45 @@ Get detailed information about a specific Redmine issue.
 Get issue #123 details
 Get issue #456 with attachments and journals
 Get full issue information including relations
+```
+
+#### 7. redmine_update_issue
+
+Update an existing Redmine issue.
+
+**Parameters:**
+- `issue_id` (required): The ID of the issue to update
+- `status_id` (optional): New status ID
+- `assigned_to_id` (optional): New assignee user ID
+- `done_ratio` (optional): Progress percentage (0-100)
+- `notes` (optional): Comment/notes to add
+- `priority_id` (optional): New priority ID
+- `due_date` (optional): Due date (YYYY-MM-DD format)
+- `estimated_hours` (optional): Estimated hours
+- `custom_fields` (optional): Array of custom field updates
+
+**Example usage:**
+```
+Update issue #123 status to completed
+Update issue #456 progress to 75% and add notes
+Change assignee and due date for issue #789
+```
+
+#### 8. redmine_bulk_update_issues
+
+Update multiple Redmine issues at once.
+
+**Parameters:**
+- `issue_ids` (required): Array of issue IDs to update
+- `status_id` (optional): New status ID for all issues
+- `assigned_to_id` (optional): New assignee user ID for all issues
+- `notes` (optional): Comment/notes to add to all issues
+
+**Example usage:**
+```
+Mark multiple issues as completed
+Reassign several issues to a different user
+Add bulk comments to multiple issues
 ```
 
 ## Development

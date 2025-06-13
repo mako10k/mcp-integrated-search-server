@@ -184,8 +184,33 @@ const RedmineProjectsParamsSchema = z.object({
   offset: z.number().int().min(0).default(0).optional(),
 });
 
+// 新しい課題更新用スキーマ
+const RedmineUpdateIssueSchema = z.object({
+  issue_id: z.number().int().positive(),
+  status_id: z.number().int().positive().optional(),
+  assigned_to_id: z.number().int().positive().optional(),
+  done_ratio: z.number().min(0).max(100).optional(),
+  notes: z.string().optional(),
+  priority_id: z.number().int().positive().optional(),
+  due_date: z.string().optional(),
+  estimated_hours: z.number().positive().optional(),
+  custom_fields: z.array(z.object({
+    id: z.number().int().positive(),
+    value: z.string()
+  })).optional(),
+});
+
+const RedmineBulkUpdateIssuesSchema = z.object({
+  issue_ids: z.array(z.number().int().positive()).min(1),
+  status_id: z.number().int().positive().optional(),
+  assigned_to_id: z.number().int().positive().optional(),
+  notes: z.string().optional(),
+});
+
 type RedmineIssuesParams = z.infer<typeof RedmineIssuesParamsSchema>;
 type RedmineCreateIssueParams = z.infer<typeof RedmineCreateIssueSchema>;
+type RedmineUpdateIssueParams = z.infer<typeof RedmineUpdateIssueSchema>;
+type RedmineBulkUpdateIssuesParams = z.infer<typeof RedmineBulkUpdateIssuesSchema>;
 type RedmineProjectsParams = z.infer<typeof RedmineProjectsParamsSchema>;
 
 class IntegratedSearchServer {
@@ -432,6 +457,99 @@ class IntegratedSearchServer {
             required: ["issue_id"],
           },
         },
+        {
+          name: "redmine_update_issue",
+          description: "Update an existing Redmine issue (単一課題の更新)",
+          inputSchema: {
+            type: "object",
+            properties: {
+              issue_id: {
+                type: "number",
+                description: "Issue ID to update",
+              },
+              status_id: {
+                type: "number",
+                description: "New status ID (optional)",
+              },
+              assigned_to_id: {
+                type: "number",
+                description: "New assignee user ID (optional)",
+              },
+              done_ratio: {
+                type: "number",
+                description: "Progress percentage (0-100, optional)",
+                minimum: 0,
+                maximum: 100,
+              },
+              notes: {
+                type: "string",
+                description: "Comment/notes to add (optional)",
+              },
+              priority_id: {
+                type: "number",
+                description: "New priority ID (optional)",
+              },
+              due_date: {
+                type: "string",
+                description: "Due date in YYYY-MM-DD format (optional)",
+              },
+              estimated_hours: {
+                type: "number",
+                description: "Estimated hours (optional)",
+                minimum: 0,
+              },
+              custom_fields: {
+                type: "array",
+                description: "Custom fields to update (optional)",
+                items: {
+                  type: "object",
+                  properties: {
+                    id: {
+                      type: "number",
+                      description: "Custom field ID",
+                    },
+                    value: {
+                      type: "string",
+                      description: "Custom field value",
+                    },
+                  },
+                  required: ["id", "value"],
+                },
+              },
+            },
+            required: ["issue_id"],
+          },
+        },
+        {
+          name: "redmine_bulk_update_issues",
+          description: "Update multiple Redmine issues at once (一括課題更新)",
+          inputSchema: {
+            type: "object",
+            properties: {
+              issue_ids: {
+                type: "array",
+                description: "Array of issue IDs to update",
+                items: {
+                  type: "number",
+                },
+                minItems: 1,
+              },
+              status_id: {
+                type: "number",
+                description: "New status ID for all issues (optional)",
+              },
+              assigned_to_id: {
+                type: "number",
+                description: "New assignee user ID for all issues (optional)",
+              },
+              notes: {
+                type: "string",
+                description: "Comment/notes to add to all issues (optional)",
+              },
+            },
+            required: ["issue_ids"],
+          },
+        },
       ],
     }));
 
@@ -450,6 +568,10 @@ class IntegratedSearchServer {
             return await this.handleRedmineListProjects(request.params.arguments || {});
           case "redmine_get_issue":
             return await this.handleRedmineGetIssue(request.params.arguments || {});
+          case "redmine_update_issue":
+            return await this.handleRedmineUpdateIssue(request.params.arguments || {});
+          case "redmine_bulk_update_issues":
+            return await this.handleRedmineBulkUpdateIssues(request.params.arguments || {});
           default:
             throw new McpError(
               ErrorCode.MethodNotFound,
@@ -1016,6 +1138,146 @@ class IntegratedSearchServer {
     formatted += `Updated: ${new Date(issue.updated_on).toLocaleString()}\n`;
 
     return formatted;
+  }
+
+  // 新しい課題更新機能の実装
+  private async handleRedmineUpdateIssue(args: unknown): Promise<{ content: Array<{ type: string; text: string }> }> {
+    try {
+      this.validateRedmineConfig();
+      const params = RedmineUpdateIssueSchema.parse(args);
+      
+      const url = `${config.REDMINE_URL}/issues/${params.issue_id}.json`;
+      
+      // 更新データの構築
+      const updateData: any = { issue: {} };
+      
+      if (params.status_id !== undefined) updateData.issue.status_id = params.status_id;
+      if (params.assigned_to_id !== undefined) updateData.issue.assigned_to_id = params.assigned_to_id;
+      if (params.done_ratio !== undefined) updateData.issue.done_ratio = params.done_ratio;
+      if (params.notes !== undefined) updateData.issue.notes = params.notes;
+      if (params.priority_id !== undefined) updateData.issue.priority_id = params.priority_id;
+      if (params.due_date !== undefined) updateData.issue.due_date = params.due_date;
+      if (params.estimated_hours !== undefined) updateData.issue.estimated_hours = params.estimated_hours;
+      if (params.custom_fields !== undefined) updateData.issue.custom_fields = params.custom_fields;
+
+      this.log("debug", `Updating Redmine issue ${params.issue_id}:`, updateData);
+
+      const response = await axios.put(url, updateData, {
+        headers: this.getRedmineHeaders(),
+        timeout: 10000,
+      });
+
+      // 更新後の課題情報を取得
+      const getResponse = await axios.get(url, {
+        headers: this.getRedmineHeaders(),
+        timeout: 10000,
+      });
+
+      const updatedIssue: RedmineIssue = getResponse.data.issue;
+      let formattedResult = `✅ Redmine Issue #${params.issue_id} Updated Successfully!\n\n`;
+      
+      // 更新された項目を表示
+      const updates: string[] = [];
+      if (params.status_id !== undefined) updates.push(`Status: ${updatedIssue.status.name}`);
+      if (params.assigned_to_id !== undefined) {
+        updates.push(`Assignee: ${updatedIssue.assigned_to ? updatedIssue.assigned_to.name : 'Unassigned'}`);
+      }
+      if (params.done_ratio !== undefined) updates.push(`Progress: ${updatedIssue.done_ratio}%`);
+      if (params.priority_id !== undefined) updates.push(`Priority: ${updatedIssue.priority.name}`);
+      if (params.due_date !== undefined) updates.push(`Due Date: ${updatedIssue.due_date || 'Not set'}`);
+      if (params.estimated_hours !== undefined) updates.push(`Estimated Hours: ${updatedIssue.estimated_hours || 'Not set'}`);
+      if (params.notes !== undefined) updates.push(`Notes added: ${params.notes}`);
+      
+      formattedResult += `Updated: ${updates.join(', ')}\n\n`;
+      formattedResult += `Issue: #${updatedIssue.id} - ${updatedIssue.subject}\n`;
+      formattedResult += `Project: ${updatedIssue.project.name}\n`;
+      formattedResult += `Last Updated: ${new Date(updatedIssue.updated_on).toLocaleString()}\n`;
+      
+      return {
+        content: [
+          {
+            type: "text",
+            text: formattedResult,
+          },
+        ],
+      };
+    } catch (error) {
+      this.handleRedmineError(error, "Failed to update Redmine issue");
+      throw error;
+    }
+  }
+
+  private async handleRedmineBulkUpdateIssues(args: unknown): Promise<{ content: Array<{ type: string; text: string }> }> {
+    try {
+      this.validateRedmineConfig();
+      const params = RedmineBulkUpdateIssuesSchema.parse(args);
+      
+      const updates: string[] = [];
+      const failures: string[] = [];
+      
+      // 各課題を順次更新
+      for (const issueId of params.issue_ids) {
+        try {
+          const url = `${config.REDMINE_URL}/issues/${issueId}.json`;
+          
+          // 更新データの構築
+          const updateData: any = { issue: {} };
+          
+          if (params.status_id !== undefined) updateData.issue.status_id = params.status_id;
+          if (params.assigned_to_id !== undefined) updateData.issue.assigned_to_id = params.assigned_to_id;
+          if (params.notes !== undefined) updateData.issue.notes = params.notes;
+
+          this.log("debug", `Bulk updating Redmine issue ${issueId}:`, updateData);
+
+          await axios.put(url, updateData, {
+            headers: this.getRedmineHeaders(),
+            timeout: 10000,
+          });
+
+          updates.push(`Issue #${issueId}`);
+        } catch (error) {
+          this.log("warn", `Failed to update issue ${issueId}:`, error);
+          failures.push(`Issue #${issueId}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+        }
+      }
+      
+      let formattedResult = `📦 Bulk Update Results\n\n`;
+      
+      if (updates.length > 0) {
+        formattedResult += `✅ Successfully Updated (${updates.length}):\n`;
+        formattedResult += updates.join(', ') + '\n\n';
+        
+        // 更新内容の詳細
+        const updateDetails: string[] = [];
+        if (params.status_id !== undefined) updateDetails.push(`Status ID: ${params.status_id}`);
+        if (params.assigned_to_id !== undefined) updateDetails.push(`Assigned to User ID: ${params.assigned_to_id}`);
+        if (params.notes !== undefined) updateDetails.push(`Notes: ${params.notes}`);
+        
+        formattedResult += `Updated Fields: ${updateDetails.join(', ')}\n\n`;
+      }
+      
+      if (failures.length > 0) {
+        formattedResult += `❌ Failed to Update (${failures.length}):\n`;
+        failures.forEach(failure => {
+          formattedResult += `  ${failure}\n`;
+        });
+      }
+      
+      formattedResult += `\nTotal Processed: ${params.issue_ids.length} issues\n`;
+      formattedResult += `Completed: ${new Date().toLocaleString()}`;
+      
+      return {
+        content: [
+          {
+            type: "text",
+            text: formattedResult,
+          },
+        ],
+      };
+    } catch (error) {
+      this.handleRedmineError(error, "Failed to bulk update Redmine issues");
+      throw error;
+    }
   }
 
   private handleRedmineError(error: unknown, defaultMessage: string) {

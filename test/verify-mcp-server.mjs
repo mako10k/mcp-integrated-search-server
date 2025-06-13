@@ -97,19 +97,19 @@ server.stdout.on('data', (data) => {
         const tools = response.result?.tools || [];
         console.log(`   Available tools: ${tools.map(t => t.name).join(', ')}`);
         
-        // 期待されるツール（Google: 2個、Redmine: 4個）
+        // 期待されるツール（Google: 2個、Redmine: 6個）
         const expectedGoogleTools = ['google_search', 'google_search_images'];
-        const expectedRedmineTools = ['redmine_list_issues', 'redmine_create_issue', 'redmine_list_projects', 'redmine_get_issue'];
+        const expectedRedmineTools = ['redmine_list_issues', 'redmine_create_issue', 'redmine_list_projects', 'redmine_get_issue', 'redmine_update_issue', 'redmine_bulk_update_issues'];
         
         const hasAllGoogleTools = expectedGoogleTools.every(tool => tools.some(t => t.name === tool));
         const hasAllRedmineTools = expectedRedmineTools.every(tool => tools.some(t => t.name === tool));
         
-        if (tools.length >= 6 && hasAllGoogleTools && hasAllRedmineTools) {
+        if (tools.length >= 8 && hasAllGoogleTools && hasAllRedmineTools) {
           console.log('\n🎉 All tests passed! Integrated Search MCP server is working correctly.');
           console.log('   ✅ Google Custom Search tools available');
-          console.log('   ✅ Redmine API tools available');
+          console.log('   ✅ Redmine API tools available (including new update features)');
         } else {
-          console.log(`\n❌ Expected 6 tools (2 Google + 4 Redmine tools)`);
+          console.log(`\n❌ Expected 8 tools (2 Google + 6 Redmine tools)`);
           console.log(`   Found ${tools.length} tools: ${tools.map(t => t.name).join(', ')}`);
           
           if (!hasAllGoogleTools) {
