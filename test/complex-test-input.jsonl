@@ -1,0 +1,2 @@
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0.0"}}}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"redmine_update_issue","arguments":{"issue_id":9191,"status_id":2,"done_ratio":85,"notes":"Complex update test with status change"}}}

@@ -10,12 +10,14 @@ A Model Context Protocol (MCP) server that provides both Google Custom Search AP
 - **Advanced Parameters**: Support for language restrictions, site-specific searches, file type filtering, and more
 
 ### Redmine API Integration
-- **Issue Management**: List, create, view, and update Redmine issues
+- **Issue Management**: List, create, view, and update Redmine issues with detailed analysis
 - **Project Management**: Browse Redmine projects
 - **Advanced Filtering**: Filter issues by project, status, assignee, and more
 - **Comprehensive Details**: Access full issue information including custom fields
 - **Bulk Operations**: Update multiple issues simultaneously
-- **Progress Tracking**: Update issue progress, status, and assignment
+- **Smart Progress Tracking**: Update issue progress, due dates, estimated hours, and assignment with workflow-aware error handling
+- **Detailed Update Reports**: Before/after comparison showing which fields succeeded and which failed due to Redmine constraints
+- **Workflow-Aware Updates**: Intelligent handling of Redmine workflow restrictions and field permissions
 
 ### Common Features
 - **Error Handling**: Robust error handling with detailed error messages
@@ -242,11 +244,11 @@ Get full issue information including relations
 
 #### 7. redmine_update_issue
 
-Update an existing Redmine issue.
+Update an existing Redmine issue with detailed analysis reporting.
 
 **Parameters:**
 - `issue_id` (required): The ID of the issue to update
-- `status_id` (optional): New status ID
+- `status_id` (optional): New status ID (may be restricted by workflow)
 - `assigned_to_id` (optional): New assignee user ID
 - `done_ratio` (optional): Progress percentage (0-100)
 - `notes` (optional): Comment/notes to add
@@ -254,6 +256,12 @@ Update an existing Redmine issue.
 - `due_date` (optional): Due date (YYYY-MM-DD format)
 - `estimated_hours` (optional): Estimated hours
 - `custom_fields` (optional): Array of custom field updates
+
+**Enhanced Features:**
+- **Before/After Comparison**: Shows exactly what changed
+- **Success/Failure Analysis**: Clearly identifies which fields updated successfully
+- **Workflow-Aware**: Explains when Redmine workflow restrictions prevent updates
+- **Detailed Reporting**: Provides comprehensive feedback on all attempted changes
 
 **Example usage:**
 ```

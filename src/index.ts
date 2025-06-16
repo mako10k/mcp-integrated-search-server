@@ -1148,6 +1148,13 @@ class IntegratedSearchServer {
       
       const url = `${config.REDMINE_URL}/issues/${params.issue_id}.json`;
       
+      // 更新前の状態を取得
+      const beforeResponse = await axios.get(url, {
+        headers: this.getRedmineHeaders(),
+        timeout: 10000,
+      });
+      const beforeIssue: RedmineIssue = beforeResponse.data.issue;
+      
       // 更新データの構築
       const updateData: any = { issue: {} };
       
@@ -1168,30 +1175,109 @@ class IntegratedSearchServer {
       });
 
       // 更新後の課題情報を取得
-      const getResponse = await axios.get(url, {
+      const afterResponse = await axios.get(url, {
         headers: this.getRedmineHeaders(),
         timeout: 10000,
       });
-
-      const updatedIssue: RedmineIssue = getResponse.data.issue;
-      let formattedResult = `✅ Redmine Issue #${params.issue_id} Updated Successfully!\n\n`;
+      const afterIssue: RedmineIssue = afterResponse.data.issue;
       
-      // 更新された項目を表示
-      const updates: string[] = [];
-      if (params.status_id !== undefined) updates.push(`Status: ${updatedIssue.status.name}`);
-      if (params.assigned_to_id !== undefined) {
-        updates.push(`Assignee: ${updatedIssue.assigned_to ? updatedIssue.assigned_to.name : 'Unassigned'}`);
+      // 更新結果の分析
+      const successful: string[] = [];
+      const failed: string[] = [];
+      const warnings: string[] = [];
+      
+      // ステータスの確認
+      if (params.status_id !== undefined) {
+        if (afterIssue.status.id === params.status_id) {
+          successful.push(`Status: ${beforeIssue.status.name} → ${afterIssue.status.name}`);
+        } else {
+          failed.push(`Status: ${beforeIssue.status.name} (ワークフロー制限により変更不可)`);
+        }
       }
-      if (params.done_ratio !== undefined) updates.push(`Progress: ${updatedIssue.done_ratio}%`);
-      if (params.priority_id !== undefined) updates.push(`Priority: ${updatedIssue.priority.name}`);
-      if (params.due_date !== undefined) updates.push(`Due Date: ${updatedIssue.due_date || 'Not set'}`);
-      if (params.estimated_hours !== undefined) updates.push(`Estimated Hours: ${updatedIssue.estimated_hours || 'Not set'}`);
-      if (params.notes !== undefined) updates.push(`Notes added: ${params.notes}`);
       
-      formattedResult += `Updated: ${updates.join(', ')}\n\n`;
-      formattedResult += `Issue: #${updatedIssue.id} - ${updatedIssue.subject}\n`;
-      formattedResult += `Project: ${updatedIssue.project.name}\n`;
-      formattedResult += `Last Updated: ${new Date(updatedIssue.updated_on).toLocaleString()}\n`;
+      // 担当者の確認
+      if (params.assigned_to_id !== undefined) {
+        const beforeAssignee = beforeIssue.assigned_to?.id || null;
+        const afterAssignee = afterIssue.assigned_to?.id || null;
+        if (afterAssignee === params.assigned_to_id) {
+          const beforeName = beforeIssue.assigned_to?.name || 'Unassigned';
+          const afterName = afterIssue.assigned_to?.name || 'Unassigned';
+          successful.push(`Assignee: ${beforeName} → ${afterName}`);
+        } else {
+          failed.push(`Assignee: 変更失敗 (権限制限の可能性)`);
+        }
+      }
+      
+      // 進捗率の確認
+      if (params.done_ratio !== undefined) {
+        if (afterIssue.done_ratio === params.done_ratio) {
+          successful.push(`Progress: ${beforeIssue.done_ratio}% → ${afterIssue.done_ratio}%`);
+        } else {
+          failed.push(`Progress: ${beforeIssue.done_ratio}% (フィールド制限により変更不可)`);
+        }
+      }
+      
+      // 優先度の確認
+      if (params.priority_id !== undefined) {
+        if (afterIssue.priority.id === params.priority_id) {
+          successful.push(`Priority: ${beforeIssue.priority.name} → ${afterIssue.priority.name}`);
+        } else {
+          failed.push(`Priority: ${beforeIssue.priority.name} (変更制限あり)`);
+        }
+      }
+      
+      // 期日の確認
+      if (params.due_date !== undefined) {
+        if (afterIssue.due_date === params.due_date) {
+          const beforeDate = beforeIssue.due_date || 'Not set';
+          const afterDate = afterIssue.due_date || 'Not set';
+          successful.push(`Due Date: ${beforeDate} → ${afterDate}`);
+        } else {
+          failed.push(`Due Date: 設定失敗 (フィールド制限の可能性)`);
+        }
+      }
+      
+      // 予定工数の確認
+      if (params.estimated_hours !== undefined) {
+        if (afterIssue.estimated_hours === params.estimated_hours) {
+          const beforeHours = beforeIssue.estimated_hours || 'Not set';
+          const afterHours = afterIssue.estimated_hours || 'Not set';
+          successful.push(`Estimated Hours: ${beforeHours} → ${afterHours}`);
+        } else {
+          failed.push(`Estimated Hours: 設定失敗 (フィールド制限の可能性)`);
+        }
+      }
+      
+      // ノートの確認
+      if (params.notes !== undefined) {
+        successful.push(`Notes: "${params.notes}" を追加`);
+      }
+      
+      // 結果の整理
+      let formattedResult = `🔄 Redmine Issue #${params.issue_id} Update Results\n\n`;
+      formattedResult += `Issue: #${afterIssue.id} - ${afterIssue.subject}\n`;
+      formattedResult += `Project: ${afterIssue.project.name} / Tracker: ${afterIssue.tracker.name}\n\n`;
+      
+      if (successful.length > 0) {
+        formattedResult += `✅ Successfully Updated (${successful.length}):\n`;
+        successful.forEach(item => formattedResult += `  ${item}\n`);
+        formattedResult += '\n';
+      }
+      
+      if (failed.length > 0) {
+        formattedResult += `❌ Update Failed (${failed.length}):\n`;
+        failed.forEach(item => formattedResult += `  ${item}\n`);
+        formattedResult += '\n';
+        formattedResult += `💡 Tip: Redmineのワークフロー設定やフィールド権限により、一部の更新が制限されている可能性があります。\n\n`;
+      }
+      
+      if (warnings.length > 0) {
+        formattedResult += `⚠️ Warnings:\n`;
+        warnings.forEach(item => formattedResult += `  ${item}\n`);
+        formattedResult += '\n';
+      }
+      
+      formattedResult += `Last Updated: ${new Date(afterIssue.updated_on).toLocaleString()}\n`;
       
       return {
         content: [
