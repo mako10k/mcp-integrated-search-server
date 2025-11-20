@@ -453,6 +453,18 @@ class IntegratedSearchServer {
                 type: "string",
                 description: "Additional data to include (e.g., 'journals,changesets,attachments')",
               },
+              journal_page: {
+                type: "number",
+                description: "Journal summary page number (1-based, 10件ずつ)",
+              },
+              journal_detail_index: {
+                type: "number",
+                description: "ジャーナル詳細を取得したい場合のインデックス（1-based）",
+              },
+              journal_detail_line_page: {
+                type: "number",
+                description: "ジャーナル詳細の行数ページ番号（1-based, 10行ずつ）",
+              },
             },
             required: ["issue_id"],
           },
@@ -952,26 +964,69 @@ class IntegratedSearchServer {
       const params = z.object({
         issue_id: z.number().int().positive(),
         include: z.string().optional(),
+        journal_page: z.number().int().min(1).optional(),
+        journal_detail_index: z.number().int().min(1).optional(),
+        journal_detail_line_page: z.number().int().min(1).optional(),
       }).parse(args);
-      
+
       const url = `${config.REDMINE_URL}/issues/${params.issue_id}.json`;
       const queryParams: Record<string, string> = {};
-      
       if (params.include) {
         queryParams.include = params.include;
       }
-
       this.log("debug", `Fetching Redmine issue ${params.issue_id} with params:`, queryParams);
-
       const response = await axios.get(url, {
         params: queryParams,
         headers: this.getRedmineHeaders(),
         timeout: 10000,
       });
-
       const issue: RedmineIssue = response.data.issue;
-      const formattedResult = this.formatRedmineIssueDetail(issue);
-      
+
+      // ページング分岐
+      let formattedResult = "";
+      const journals = (issue as any).journals as any[] | undefined;
+      if (params.journal_detail_index && journals && journals.length > 0) {
+        // ジャーナル詳細ページング
+        const idx = params.journal_detail_index - 1;
+        if (journals[idx]) {
+          const notes = journals[idx].notes || "";
+          const lines = notes.split(/\r?\n/);
+          const page = params.journal_detail_line_page || 1;
+          const pageSize = 10;
+          const start = (page - 1) * pageSize;
+          const end = start + pageSize;
+          const pageLines = lines.slice(start, end);
+          formattedResult = `Journal [${params.journal_detail_index}] 詳細 (行 ${start + 1}-${Math.min(end, lines.length)} / ${lines.length}):\n`;
+          formattedResult += pageLines.join("\n");
+          if (end < lines.length) {
+            formattedResult += `\n... (次のページあり)`;
+          }
+        } else {
+          formattedResult = `指定されたジャーナルは存在しません。`;
+        }
+      } else if (journals && journals.length > 0) {
+        // ジャーナル概要ページング
+        const page = params.journal_page || 1;
+        const pageSize = 10;
+        const start = (page - 1) * pageSize;
+        const end = start + pageSize;
+        const pageJournals = journals.slice(start, end);
+        formattedResult = `Journals (Comments) 概要 (ページ ${page} / ${Math.ceil(journals.length / pageSize)}):\n`;
+        pageJournals.forEach((journal: any, idx: number) => {
+          const author = journal.user && journal.user.name ? journal.user.name : "(unknown)";
+          const created = journal.created_on ? new Date(journal.created_on).toLocaleString() : "";
+          const notes = journal.notes ? journal.notes : "";
+          const summary = notes.length > 40 ? notes.substring(0, 40) + "..." : notes;
+          formattedResult += `  [${start + idx + 1}] ${author} (${created})\n    ${summary.replace(/\n/g, " ")}\n`;
+        });
+        if (end < journals.length) {
+          formattedResult += `... (次のページあり)`;
+        }
+      } else {
+        // 通常の課題詳細
+        formattedResult = this.formatRedmineIssueDetail(issue);
+      }
+
       return {
         content: [
           {
@@ -982,7 +1037,6 @@ class IntegratedSearchServer {
       };
     } catch (error) {
       this.handleRedmineError(error, "Failed to get Redmine issue");
-      // この行には到達しない（handleRedmineErrorが例外をスローするため）
       throw error;
     }
   }
@@ -1102,29 +1156,29 @@ class IntegratedSearchServer {
     formatted += `Status: ${issue.status.name}\n`;
     formatted += `Priority: ${issue.priority.name}\n`;
     formatted += `Author: ${issue.author.name}\n`;
-    
+
     if (issue.assigned_to) {
       formatted += `Assignee: ${issue.assigned_to.name}\n`;
     }
-    
+
     if (issue.start_date) {
       formatted += `Start Date: ${issue.start_date}\n`;
     }
-    
+
     if (issue.due_date) {
       formatted += `Due Date: ${issue.due_date}\n`;
     }
-    
+
     if (issue.estimated_hours) {
       formatted += `Estimated Hours: ${issue.estimated_hours}\n`;
     }
-    
+
     formatted += `Done Ratio: ${issue.done_ratio}%\n`;
-    
+
     if (issue.description) {
       formatted += `\nDescription:\n${issue.description}\n`;
     }
-    
+
     // カスタムフィールドがあれば表示
     if (issue.custom_fields && issue.custom_fields.length > 0) {
       formatted += `\nCustom Fields:\n`;
@@ -1133,7 +1187,20 @@ class IntegratedSearchServer {
         formatted += `  ${field.name}: ${value}\n`;
       });
     }
-    
+
+    // ジャーナル（コメント）があれば表示
+    if ((issue as any).journals && Array.isArray((issue as any).journals) && (issue as any).journals.length > 0) {
+      formatted += `\nJournals (Comments):\n`;
+      (issue as any).journals.forEach((journal: any, idx: number) => {
+        const author = journal.user && journal.user.name ? journal.user.name : "(unknown)";
+        const notes = journal.notes ? journal.notes : "";
+        const created = journal.created_on ? new Date(journal.created_on).toLocaleString() : "";
+        if (notes.trim().length > 0) {
+          formatted += `  [${idx + 1}] ${author} (${created})\n    ${notes.replace(/\n/g, "\n    ")}\n`;
+        }
+      });
+    }
+
     formatted += `\nCreated: ${new Date(issue.created_on).toLocaleString()}\n`;
     formatted += `Updated: ${new Date(issue.updated_on).toLocaleString()}\n`;
 
