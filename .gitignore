@@ -14,6 +14,10 @@ dist/
 .env.test.local
 .env.production.local
 
+# Local configuration overrides (may contain secrets)
+*.local.json
+redmine-repositories.local.json
+
 # IDE
 .vscode/settings.json
 .idea/

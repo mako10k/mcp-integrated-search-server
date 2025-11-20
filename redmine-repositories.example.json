@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "configVersion": "1.0",
+  "defaultRepositoryId": "main",
+  "repositories": [
+    {
+      "id": "main",
+      "displayName": "Main Redmine Server",
+      "url": "https://redmine.example.com",
+      "apiKey": "${REDMINE_MAIN_API_KEY}",
+      "secretSource": "environment",
+      "defaults": {
+        "projectId": null,
+        "trackerId": null,
+        "statusId": 1,
+        "priorityId": 2
+      },
+      "enabled": true,
+      "description": "Main production Redmine server"
+    },
+    {
+      "id": "dev",
+      "displayName": "Development Redmine",
+      "url": "https://redmine-dev.example.com",
+      "apiKey": "${REDMINE_DEV_API_KEY}",
+      "secretSource": "environment",
+      "defaults": {
+        "projectId": null,
+        "trackerId": null,
+        "statusId": 1,
+        "priorityId": 2
+      },
+      "enabled": true,
+      "description": "Development environment Redmine server"
+    },
+    {
+      "id": "staging",
+      "displayName": "Staging Redmine",
+      "url": "https://redmine-staging.example.com",
+      "apiKey": "${REDMINE_STAGING_API_KEY}",
+      "secretSource": "environment",
+      "defaults": {
+        "projectId": null,
+        "trackerId": null,
+        "statusId": 1,
+        "priorityId": 2
+      },
+      "enabled": false,
+      "description": "Staging environment Redmine server (disabled by default)"
+    }
+  ]
+}
