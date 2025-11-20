@@ -82,6 +82,30 @@ npm run build
 
 ## Redmine API Setup
 
+### Multi-Repository (Recommended)
+
+This server supports multiple Redmine repositories with secure secret handling.
+
+1. Create a config file from the example:
+```powershell
+Copy-Item redmine-repositories.example.json redmine-repositories.json
+```
+
+2. Set environment variables referenced by the config (see `.env.example`):
+```powershell
+Copy-Item .env.example .env
+# then edit .env to set REDMINE_MAIN_API_KEY, REDMINE_DEV_API_KEY, etc.
+```
+
+3. Optionally specify a custom config path:
+```powershell
+$env:REDMINE_CONFIG_PATH = "./redmine-repositories.json"
+```
+
+Notes:
+- Do not hardcode API keys in JSON. Use `${VAR_NAME}` references.
+- When calling any Redmine tool, you may pass `repository_id` to select a repository. If omitted, the default repository is used.
+
 ### 1. Get Redmine API Key
 
 1. Log in to your Redmine instance
@@ -90,12 +114,12 @@ npm run build
 4. Click "Show" to reveal your API key, or "Reset" to generate a new one
 5. Copy the API key
 
-### 2. Configure Redmine URL
+### 2. Configure Redmine URL (Legacy single-repository)
 
 1. Set `REDMINE_URL` to your Redmine instance URL (e.g., `https://redmine.example.com`)
 2. Set `REDMINE_API_KEY` to your API key from step 1
 
-**Note**: Redmine configuration is optional. If not provided, only Google Search functionality will be available.
+**Note**: Legacy env-based configuration remains supported as a fallback when multi-repository config is not present.
 
 ## Usage
 
@@ -168,11 +192,14 @@ Search for clipart images of "business icons"
 
 #### Redmine API Tools (6)
 
+All Redmine tools accept an optional `repository_id` parameter to target a specific repository. When omitted, the default repository configured in `redmine-repositories.json` is used.
+
 #### 3. redmine_list_issues
 
 List and filter Redmine issues.
 
 **Parameters:**
+- `repository_id` (optional): Target repository id (default repository if omitted)
 - `project_id` (optional): Project ID to filter issues
 - `status_id` (optional): Status ID or 'open', 'closed', '*' for all
 - `assigned_to_id` (optional): User ID of the assignee
@@ -194,6 +221,7 @@ List issues assigned to user 5
 Create a new Redmine issue.
 
 **Parameters:**
+- `repository_id` (optional): Target repository id (default repository if omitted)
 - `project_id` (required): Project ID where to create the issue
 - `subject` (required): Issue subject/title
 - `description` (optional): Issue description

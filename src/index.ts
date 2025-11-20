@@ -11,14 +11,25 @@ import {
 import { z } from "zod";
 import axios from "axios";
 import dotenv from "dotenv";
+import path from "path";
+import { RedmineRepositoryManager } from "./config/redmine-repository-manager";
 
-// 環境変数を読み込み
-dotenv.config();
+// 環境変数を読み込み (プロジェクトルートの.envを明示的に指定)
+// CommonJSなので__dirnameは直接使用可能
+const projectRoot = path.resolve(__dirname, '..');
+dotenv.config({ path: path.join(projectRoot, '.env') });
+
+// REDMINE_CONFIG_PATHが未設定の場合はプロジェクトルートのlocal.jsonを使用
+if (!process.env.REDMINE_CONFIG_PATH) {
+  const defaultConfigPath = path.join(projectRoot, 'redmine-repositories.local.json');
+  process.env.REDMINE_CONFIG_PATH = defaultConfigPath;
+  console.log(`[IntegratedSearchServer] REDMINE_CONFIG_PATH not set, using: ${defaultConfigPath}`);
+}
 
 // 環境変数のバリデーション
 const ConfigSchema = z.object({
-  GOOGLE_API_KEY: z.string().min(1, "Google API key is required"),
-  GOOGLE_SEARCH_ENGINE_ID: z.string().min(1, "Google Search Engine ID is required"),
+  GOOGLE_API_KEY: z.string().min(1, "Google API key is required").optional(),
+  GOOGLE_SEARCH_ENGINE_ID: z.string().min(1, "Google Search Engine ID is required").optional(),
   REDMINE_URL: z.string().url().optional(),
   REDMINE_API_KEY: z.string().optional(),
   LOG_LEVEL: z.enum(["error", "warn", "info", "debug"]).default("info"),
@@ -231,6 +242,22 @@ class IntegratedSearchServer {
 
     this.setupToolHandlers();
     this.setupErrorHandling();
+
+    this.repoManager = new RedmineRepositoryManager();
+  }
+
+  private readonly repoManager: RedmineRepositoryManager;
+
+  private getRepoContext(repositoryId?: string): { baseUrl: string; headers: Record<string, string> } {
+    const repo = this.repoManager.getRepository(repositoryId);
+    const apiKey = this.repoManager.getResolvedApiKey(repo.id);
+    return {
+      baseUrl: repo.url,
+      headers: {
+        "Content-Type": "application/json",
+        "X-Redmine-API-Key": apiKey,
+      },
+    };
   }
 
   private setupToolHandlers(): void {
@@ -330,6 +357,10 @@ class IntegratedSearchServer {
           inputSchema: {
             type: "object",
             properties: {
+              repository_id: {
+                type: "string",
+                description: "Optional repository ID. Defaults to configured default repository.",
+              },
               project_id: {
                 type: "number",
                 description: "Project ID to filter issues (optional)",
@@ -372,6 +403,10 @@ class IntegratedSearchServer {
           inputSchema: {
             type: "object",
             properties: {
+              repository_id: {
+                type: "string",
+                description: "Optional repository ID. Defaults to configured default repository.",
+              },
               project_id: {
                 type: "number",
                 description: "Project ID where the issue will be created",
@@ -422,6 +457,10 @@ class IntegratedSearchServer {
           inputSchema: {
             type: "object",
             properties: {
+              repository_id: {
+                type: "string",
+                description: "Optional repository ID. Defaults to configured default repository.",
+              },
               limit: {
                 type: "number",
                 description: "Number of projects to return (1-100, default: 25)",
@@ -445,6 +484,10 @@ class IntegratedSearchServer {
           inputSchema: {
             type: "object",
             properties: {
+              repository_id: {
+                type: "string",
+                description: "Optional repository ID. Defaults to configured default repository.",
+              },
               issue_id: {
                 type: "number",
                 description: "Issue ID to retrieve",
@@ -475,6 +518,10 @@ class IntegratedSearchServer {
           inputSchema: {
             type: "object",
             properties: {
+              repository_id: {
+                type: "string",
+                description: "Optional repository ID. Defaults to configured default repository.",
+              },
               issue_id: {
                 type: "number",
                 description: "Issue ID to update",
@@ -538,6 +585,10 @@ class IntegratedSearchServer {
           inputSchema: {
             type: "object",
             properties: {
+              repository_id: {
+                type: "string",
+                description: "Optional repository ID. Defaults to configured default repository.",
+              },
               issue_ids: {
                 type: "array",
                 description: "Array of issue IDs to update",
@@ -618,6 +669,7 @@ class IntegratedSearchServer {
               text: `No search results found for query: "${params.query}"`,
             },
           ],
+      
         };
       }
 
@@ -732,6 +784,13 @@ class IntegratedSearchServer {
     params: SearchParams & { imgSize?: string; imgType?: string },
     searchType: "web" | "image" = "web"
   ): Promise<GoogleSearchResponse> {
+    if (!config.GOOGLE_API_KEY || !config.GOOGLE_SEARCH_ENGINE_ID) {
+      throw new McpError(
+        ErrorCode.InvalidRequest,
+        "Google Search is not configured. Set GOOGLE_API_KEY and GOOGLE_SEARCH_ENGINE_ID."
+      );
+    }
+
     const url = "https://www.googleapis.com/customsearch/v1";
     
     const searchParams: Record<string, string | number> = {
@@ -829,10 +888,12 @@ class IntegratedSearchServer {
   // Redmine API関連メソッド
   private async handleRedmineListIssues(args: unknown): Promise<{ content: Array<{ type: string; text: string }> }> {
     try {
-      this.validateRedmineConfig();
       const params = RedmineIssuesParamsSchema.parse(args);
+      const repoArg = z.object({ repository_id: z.string().optional() }).safeParse(args);
+      const repositoryId = repoArg.success ? repoArg.data.repository_id : undefined;
+      const { baseUrl, headers } = this.getRepoContext(repositoryId);
       
-      const url = `${config.REDMINE_URL}/issues.json`;
+      const url = `${baseUrl}/issues.json`;
       const queryParams: Record<string, string | number> = {
         limit: params.limit || 25,
         offset: params.offset || 0,
@@ -849,7 +910,7 @@ class IntegratedSearchServer {
 
       const response = await axios.get(url, {
         params: queryParams,
-        headers: this.getRedmineHeaders(),
+        headers,
         timeout: 10000,
       });
 
@@ -875,10 +936,12 @@ class IntegratedSearchServer {
 
   private async handleRedmineCreateIssue(args: unknown): Promise<{ content: Array<{ type: string; text: string }> }> {
     try {
-      this.validateRedmineConfig();
       const params = RedmineCreateIssueSchema.parse(args);
+      const repoArg = z.object({ repository_id: z.string().optional() }).safeParse(args);
+      const repositoryId = repoArg.success ? repoArg.data.repository_id : undefined;
+      const { baseUrl, headers } = this.getRepoContext(repositoryId);
       
-      const url = `${config.REDMINE_URL}/issues.json`;
+      const url = `${baseUrl}/issues.json`;
       const issueData = {
         issue: {
           project_id: params.project_id,
@@ -897,7 +960,7 @@ class IntegratedSearchServer {
       this.log("debug", `Creating Redmine issue:`, issueData);
 
       const response = await axios.post(url, issueData, {
-        headers: this.getRedmineHeaders(),
+        headers,
         timeout: 10000,
       });
 
@@ -921,10 +984,12 @@ class IntegratedSearchServer {
 
   private async handleRedmineListProjects(args: unknown): Promise<{ content: Array<{ type: string; text: string }> }> {
     try {
-      this.validateRedmineConfig();
       const params = RedmineProjectsParamsSchema.parse(args);
+      const repoArg = z.object({ repository_id: z.string().optional() }).safeParse(args);
+      const repositoryId = repoArg.success ? repoArg.data.repository_id : undefined;
+      const { baseUrl, headers } = this.getRepoContext(repositoryId);
       
-      const url = `${config.REDMINE_URL}/projects.json`;
+      const url = `${baseUrl}/projects.json`;
       const queryParams: Record<string, string | number> = {
         limit: params.limit || 25,
         offset: params.offset || 0,
@@ -934,7 +999,7 @@ class IntegratedSearchServer {
 
       const response = await axios.get(url, {
         params: queryParams,
-        headers: this.getRedmineHeaders(),
+        headers,
         timeout: 10000,
       });
 
@@ -960,7 +1025,6 @@ class IntegratedSearchServer {
 
   private async handleRedmineGetIssue(args: unknown): Promise<{ content: Array<{ type: string; text: string }> }> {
     try {
-      this.validateRedmineConfig();
       const params = z.object({
         issue_id: z.number().int().positive(),
         include: z.string().optional(),
@@ -968,8 +1032,11 @@ class IntegratedSearchServer {
         journal_detail_index: z.number().int().min(1).optional(),
         journal_detail_line_page: z.number().int().min(1).optional(),
       }).parse(args);
+      const repoArg = z.object({ repository_id: z.string().optional() }).safeParse(args);
+      const repositoryId = repoArg.success ? repoArg.data.repository_id : undefined;
+      const { baseUrl, headers } = this.getRepoContext(repositoryId);
 
-      const url = `${config.REDMINE_URL}/issues/${params.issue_id}.json`;
+      const url = `${baseUrl}/issues/${params.issue_id}.json`;
       const queryParams: Record<string, string> = {};
       if (params.include) {
         queryParams.include = params.include;
@@ -977,7 +1044,7 @@ class IntegratedSearchServer {
       this.log("debug", `Fetching Redmine issue ${params.issue_id} with params:`, queryParams);
       const response = await axios.get(url, {
         params: queryParams,
-        headers: this.getRedmineHeaders(),
+        headers,
         timeout: 10000,
       });
       const issue: RedmineIssue = response.data.issue;
@@ -1210,14 +1277,15 @@ class IntegratedSearchServer {
   // 新しい課題更新機能の実装
   private async handleRedmineUpdateIssue(args: unknown): Promise<{ content: Array<{ type: string; text: string }> }> {
     try {
-      this.validateRedmineConfig();
       const params = RedmineUpdateIssueSchema.parse(args);
-      
-      const url = `${config.REDMINE_URL}/issues/${params.issue_id}.json`;
+      const repoArg = z.object({ repository_id: z.string().optional() }).safeParse(args);
+      const repositoryId = repoArg.success ? repoArg.data.repository_id : undefined;
+      const { baseUrl, headers } = this.getRepoContext(repositoryId);
+      const url = `${baseUrl}/issues/${params.issue_id}.json`;
       
       // 更新前の状態を取得
       const beforeResponse = await axios.get(url, {
-        headers: this.getRedmineHeaders(),
+        headers,
         timeout: 10000,
       });
       const beforeIssue: RedmineIssue = beforeResponse.data.issue;
@@ -1237,13 +1305,13 @@ class IntegratedSearchServer {
       this.log("debug", `Updating Redmine issue ${params.issue_id}:`, updateData);
 
       const response = await axios.put(url, updateData, {
-        headers: this.getRedmineHeaders(),
+        headers,
         timeout: 10000,
       });
 
       // 更新後の課題情報を取得
       const afterResponse = await axios.get(url, {
-        headers: this.getRedmineHeaders(),
+        headers,
         timeout: 10000,
       });
       const afterIssue: RedmineIssue = afterResponse.data.issue;
@@ -1362,8 +1430,10 @@ class IntegratedSearchServer {
 
   private async handleRedmineBulkUpdateIssues(args: unknown): Promise<{ content: Array<{ type: string; text: string }> }> {
     try {
-      this.validateRedmineConfig();
       const params = RedmineBulkUpdateIssuesSchema.parse(args);
+      const repoArg = z.object({ repository_id: z.string().optional() }).safeParse(args);
+      const repositoryId = repoArg.success ? repoArg.data.repository_id : undefined;
+      const { baseUrl, headers } = this.getRepoContext(repositoryId);
       
       const updates: string[] = [];
       const failures: string[] = [];
@@ -1371,7 +1441,7 @@ class IntegratedSearchServer {
       // 各課題を順次更新
       for (const issueId of params.issue_ids) {
         try {
-          const url = `${config.REDMINE_URL}/issues/${issueId}.json`;
+          const url = `${baseUrl}/issues/${issueId}.json`;
           
           // 更新データの構築
           const updateData: any = { issue: {} };
@@ -1383,7 +1453,7 @@ class IntegratedSearchServer {
           this.log("debug", `Bulk updating Redmine issue ${issueId}:`, updateData);
 
           await axios.put(url, updateData, {
-            headers: this.getRedmineHeaders(),
+            headers,
             timeout: 10000,
           });
 

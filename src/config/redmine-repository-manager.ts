@@ -48,12 +48,14 @@ export class RedmineRepositoryManager {
 
     const candidates = [explicitPath, localPath, defaultPath, homePath].filter(Boolean) as string[];
 
+
     for (const p of candidates) {
       if (fileExists(p)) {
         const raw = fs.readFileSync(p, 'utf-8');
         const json = JSON.parse(raw);
         const parsed = RedmineConfigSchema.parse(json);
         this.config = parsed;
+        // Config loaded successfully from path p
         return parsed;
       }
     }
@@ -77,6 +79,7 @@ export class RedmineRepositoryManager {
         ],
       };
       this.config = RedmineConfigSchema.parse(legacy);
+      // Legacy configuration constructed from environment variables
       return this.config;
     }
 
