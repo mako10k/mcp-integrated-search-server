@@ -109,6 +109,19 @@ interface RedmineIssue {
   }>;
 }
 
+interface RedmineJournalUser {
+  id?: number;
+  name: string;
+}
+
+interface RedmineJournal {
+  id: number;
+  notes?: string;
+  private_notes?: boolean;
+  user?: RedmineJournalUser;
+  created_on: string;
+}
+
 interface RedmineProject {
   id: number;
   name: string;
@@ -230,10 +243,27 @@ const RedmineBulkUpdateIssuesSchema = z.object({
   notes: z.string().optional(),
 });
 
+const RedmineAddIssueCommentSchema = z.object({
+  issue_id: z.number().int().positive(),
+  notes: z
+    .string()
+    .min(1, "Notes are required")
+    .refine((value) => value.trim().length > 0, "Notes cannot be blank"),
+  private_notes: z.boolean().optional(),
+});
+
+const RedmineListIssueCommentsSchema = z.object({
+  issue_id: z.number().int().positive(),
+  offset: z.number().int().min(0).default(0).optional(),
+  limit: z.number().int().min(1).max(100).default(20).optional(),
+});
+
 type RedmineIssuesParams = z.infer<typeof RedmineIssuesParamsSchema>;
 type RedmineCreateIssueParams = z.infer<typeof RedmineCreateIssueSchema>;
 type RedmineUpdateIssueParams = z.infer<typeof RedmineUpdateIssueSchema>;
 type RedmineBulkUpdateIssuesParams = z.infer<typeof RedmineBulkUpdateIssuesSchema>;
+type RedmineAddIssueCommentParams = z.infer<typeof RedmineAddIssueCommentSchema>;
+type RedmineListIssueCommentsParams = z.infer<typeof RedmineListIssueCommentsSchema>;
 type RedmineProjectsParams = z.infer<typeof RedmineProjectsParamsSchema>;
 type RepoContext = { repo: RedmineRepository; baseUrl: string; headers: Record<string, string> };
 
@@ -630,6 +660,63 @@ class IntegratedSearchServer {
           },
         },
         {
+          name: "redmine_list_issue_comments",
+          description: "List Redmine issue comments (journals with notes) with client-side pagination",
+          inputSchema: {
+            type: "object",
+            properties: {
+              repository_id: {
+                type: "string",
+                description: "Optional repository ID. Defaults to configured default repository.",
+              },
+              issue_id: {
+                type: "number",
+                description: "Issue ID whose comments should be listed",
+              },
+              offset: {
+                type: "number",
+                description: "0-based offset applied after sorting by created_on (default: 0)",
+                minimum: 0,
+                default: 0,
+              },
+              limit: {
+                type: "number",
+                description: "Number of comments to return after filtering (1-100, default: 20)",
+                minimum: 1,
+                maximum: 100,
+                default: 20,
+              },
+            },
+            required: ["issue_id"],
+          },
+        },
+        {
+          name: "redmine_add_issue_comment",
+          description: "Add a new comment (journal note) to a Redmine issue",
+          inputSchema: {
+            type: "object",
+            properties: {
+              repository_id: {
+                type: "string",
+                description: "Optional repository ID. Defaults to configured default repository.",
+              },
+              issue_id: {
+                type: "number",
+                description: "Issue ID to append a comment to",
+              },
+              notes: {
+                type: "string",
+                description: "Comment body. Blank notes are rejected by validation.",
+              },
+              private_notes: {
+                type: "boolean",
+                description: "Mark the comment as private (requires Redmine permission)",
+              },
+            },
+            required: ["issue_id", "notes"],
+          },
+        },
+        {
           name: "redmine_update_issue",
           description: "Update an existing Redmine issue (単一課題の更新)",
           inputSchema: {
@@ -757,6 +844,10 @@ class IntegratedSearchServer {
             return await this.handleRedmineListProjects(request.params.arguments || {});
           case "redmine_get_issue":
             return await this.handleRedmineGetIssue(request.params.arguments || {});
+          case "redmine_list_issue_comments":
+            return await this.handleRedmineListIssueComments(request.params.arguments || {});
+          case "redmine_add_issue_comment":
+            return await this.handleRedmineAddIssueComment(request.params.arguments || {});
           case "redmine_update_issue":
             return await this.handleRedmineUpdateIssue(request.params.arguments || {});
           case "redmine_bulk_update_issues":
@@ -1273,6 +1364,144 @@ class IntegratedSearchServer {
     }
   }
 
+  private async handleRedmineListIssueComments(args: unknown): Promise<{ content: Array<{ type: string; text: string }> }> {
+    try {
+      const params = RedmineListIssueCommentsSchema.parse(args);
+      const repoArg = z.object({ repository_id: z.string().optional() }).safeParse(args);
+      const repositoryId = repoArg.success ? repoArg.data.repository_id : undefined;
+      const { baseUrl, headers } = this.getRepoContext(repositoryId);
+
+      const response = await axios.get(`${baseUrl}/issues/${params.issue_id}.json`, {
+        params: { include: "journals" },
+        headers,
+        timeout: 10000,
+      });
+
+      const noteJournals = this.extractNoteJournals((response.data.issue as { journals?: unknown }).journals);
+      if (noteJournals.length === 0) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Issue #${params.issue_id} has no comments containing notes.`,
+            },
+          ],
+        };
+      }
+
+      const offset = params.offset ?? 0;
+      const limit = params.limit ?? 20;
+
+      if (offset >= noteJournals.length) {
+        throw new McpError(
+          ErrorCode.InvalidParams,
+          `Offset ${offset} exceeds available comments (${noteJournals.length}).`
+        );
+      }
+
+      const slice = noteJournals.slice(offset, offset + limit);
+      const nextOffset = offset + slice.length < noteJournals.length ? offset + slice.length : undefined;
+      const formattedResult = this.formatIssueComments(params.issue_id, slice, {
+        offset,
+        limit,
+        total: noteJournals.length,
+        nextOffset,
+      });
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: formattedResult,
+          },
+        ],
+      };
+    } catch (error) {
+      this.handleRedmineError(error, "Failed to list Redmine issue comments");
+      throw error;
+    }
+  }
+
+  private async handleRedmineAddIssueComment(args: unknown): Promise<{ content: Array<{ type: string; text: string }> }> {
+    try {
+      const params = RedmineAddIssueCommentSchema.parse(args);
+      const repoArg = z.object({ repository_id: z.string().optional() }).safeParse(args);
+      const repositoryId = repoArg.success ? repoArg.data.repository_id : undefined;
+      const context = this.getRepoContext(repositoryId);
+      const { baseUrl, headers } = context;
+      const url = `${baseUrl}/issues/${params.issue_id}.json`;
+
+      const payload: { issue: { notes: string; private_notes?: boolean } } = {
+        issue: { notes: params.notes },
+      };
+
+      if (params.private_notes !== undefined) {
+        payload.issue.private_notes = params.private_notes;
+      }
+
+      this.log(
+        "debug",
+        `Adding comment to Redmine issue ${params.issue_id}`,
+        {
+          repositoryId: context.repo.id,
+          privateNotes: params.private_notes === true,
+          notesLength: params.notes.length,
+        }
+      );
+
+      await axios.put(url, payload, {
+        headers,
+        timeout: 10000,
+      });
+
+      let latestEntry: RedmineJournal | undefined;
+      let totalCount: number | undefined;
+
+      try {
+        const refreshResponse = await axios.get(`${baseUrl}/issues/${params.issue_id}.json`, {
+          params: { include: "journals" },
+          headers,
+          timeout: 10000,
+        });
+        const noteJournals = this.extractNoteJournals((refreshResponse.data.issue as { journals?: unknown }).journals);
+        if (noteJournals.length > 0) {
+          latestEntry = noteJournals[noteJournals.length - 1];
+          totalCount = noteJournals.length;
+        }
+      } catch (refreshError) {
+        this.log(
+          "warn",
+          `Added comment but failed to fetch updated journals for issue ${params.issue_id}`,
+          refreshError
+        );
+      }
+
+      let formattedResult = `📝 Comment added to issue #${params.issue_id}\n`;
+      formattedResult += `Visibility: ${params.private_notes ? "Private" : "Public"}\n`;
+      const preview = params.notes.length > 400 ? `${params.notes.slice(0, 400)}...` : params.notes;
+      formattedResult += `Preview:\n${preview}\n`;
+
+      if (latestEntry && typeof totalCount === "number") {
+        formattedResult += `\nLatest journal entry (#${totalCount}):\n`;
+        formattedResult += this.formatJournalEntry(latestEntry, totalCount);
+      } else {
+        formattedResult += `\nComment stored successfully, but the updated journal list was not available.\n`;
+      }
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: formattedResult,
+          },
+        ],
+      };
+    } catch (error) {
+      this.handleRedmineError(error, "Failed to add Redmine issue comment");
+      throw error;
+    }
+  }
+
   private validateRedmineConfig(): void {
     if (!config.REDMINE_URL || !config.REDMINE_API_KEY) {
       throw new McpError(
@@ -1437,6 +1666,105 @@ class IntegratedSearchServer {
     formatted += `Updated: ${new Date(issue.updated_on).toLocaleString()}\n`;
 
     return formatted;
+  }
+
+  private formatIssueComments(
+    issueId: number,
+    comments: RedmineJournal[],
+    meta: { offset: number; limit: number; total: number; nextOffset?: number }
+  ): string {
+    const lines: string[] = [];
+    lines.push(`💬 Issue #${issueId} Comments`);
+    lines.push(
+      `Showing ${comments.length} of ${meta.total} (offset ${meta.offset}, limit ${meta.limit})`
+    );
+    lines.push("");
+
+    comments.forEach((comment, index) => {
+      lines.push(this.formatJournalEntry(comment, meta.offset + index + 1));
+      lines.push("");
+    });
+
+    lines.push(`Total comments: ${meta.total}`);
+    lines.push(`Has more: ${meta.nextOffset !== undefined ? "Yes" : "No"}`);
+    if (meta.nextOffset !== undefined) {
+      lines.push(`Next offset: ${meta.nextOffset}`);
+    }
+
+    return lines.join("\n").trimEnd();
+  }
+
+  private formatJournalEntry(journal: RedmineJournal, position: number): string {
+    const author = journal.user?.name ?? "Unknown author";
+    const createdDate = new Date(journal.created_on);
+    const created = Number.isNaN(createdDate.getTime())
+      ? "Unknown time"
+      : createdDate.toLocaleString();
+    const visibility = journal.private_notes ? "Private" : "Public";
+    const noteBody = (journal.notes ?? "").replace(/\n/g, "\n  ");
+
+    return `[${position}] ${author} · ${created} · ${visibility}\n  ${noteBody}`;
+  }
+
+  private extractNoteJournals(journals: unknown): RedmineJournal[] {
+    if (!Array.isArray(journals)) {
+      return [];
+    }
+
+    const sanitized: RedmineJournal[] = [];
+
+    for (const entry of journals) {
+      if (!entry || typeof entry !== "object") {
+        continue;
+      }
+
+      const candidate = entry as Partial<RedmineJournal>;
+      if (typeof candidate.id !== "number") {
+        continue;
+      }
+      if (typeof candidate.notes !== "string") {
+        continue;
+      }
+      const trimmedNotes = candidate.notes.trim();
+      if (!trimmedNotes) {
+        continue;
+      }
+      if (typeof candidate.created_on !== "string") {
+        continue;
+      }
+
+      let normalizedUser: RedmineJournalUser | undefined;
+      const userCandidate = candidate.user;
+      if (
+        userCandidate &&
+        typeof userCandidate === "object" &&
+        typeof userCandidate.name === "string"
+      ) {
+        normalizedUser = {
+          name: userCandidate.name,
+          id: typeof userCandidate.id === "number" ? userCandidate.id : undefined,
+        };
+      }
+
+      sanitized.push({
+        id: candidate.id,
+        notes: trimmedNotes,
+        private_notes: typeof candidate.private_notes === "boolean" ? candidate.private_notes : undefined,
+        created_on: candidate.created_on,
+        user: normalizedUser,
+      });
+    }
+
+    return sanitized.sort((a, b) => {
+      const aTime = new Date(a.created_on).getTime();
+      const bTime = new Date(b.created_on).getTime();
+
+      if (Number.isNaN(aTime) || Number.isNaN(bTime)) {
+        return 0;
+      }
+
+      return aTime - bTime;
+    });
   }
 
   // 新しい課題更新機能の実装

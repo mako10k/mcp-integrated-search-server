@@ -15,6 +15,7 @@ A Model Context Protocol (MCP) server that provides both Google Custom Search AP
 - **Advanced Filtering**: Filter issues by project, status, assignee, and more
 - **Comprehensive Details**: Access full issue information including custom fields
 - **Bulk Operations**: Update multiple issues simultaneously
+- **Issue Comments**: Add new journal notes and list existing comments with pagination helpers
 - **Smart Progress Tracking**: Update issue progress, due dates, estimated hours, and assignment with workflow-aware error handling
 - **Detailed Update Reports**: Before/after comparison showing which fields succeeded and which failed due to Redmine constraints
 - **Workflow-Aware Updates**: Intelligent handling of Redmine workflow restrictions and field permissions
@@ -147,7 +148,7 @@ Add the server to your Claude Desktop configuration:
 }
 ```
 
-### Available Tools (8 total)
+### Available Tools (10 total)
 
 #### Google Search Tools (2)
 
@@ -190,7 +191,7 @@ Find large photos of "sunset landscape"
 Search for clipart images of "business icons"
 ```
 
-#### Redmine API Tools (6)
+#### Redmine API Tools (8)
 
 All Redmine tools accept an optional `repository_id` parameter to target a specific repository. When omitted, the default repository configured in `redmine-repositories.json` is used.
 
@@ -310,6 +311,42 @@ Update multiple Redmine issues at once.
 Mark multiple issues as completed
 Reassign several issues to a different user
 Add bulk comments to multiple issues
+```
+
+#### 9. redmine_list_issue_comments
+
+List existing Redmine issue comments (journals containing notes) with client-side pagination.
+
+- `repository_id` (optional): Target repository id (default repository if omitted)
+- `issue_id` (required): Issue whose comments should be inspected
+- `offset` (optional): 0-based offset after sorting by `created_on` (default: 0)
+- `limit` (optional): Number of comments to return (1-100, default: 20)
+
+Returns a formatted list plus metadata (total count, whether more comments remain, and the next offset to request).
+
+**Example usage:**
+```
+List the latest 5 comments for issue #42
+Paginate through comments using next offset values
+Inspect whether private comments exist (requires proper Redmine permissions)
+```
+
+#### 10. redmine_add_issue_comment
+
+Append a new journal note to a Redmine issue using the official `notes` field.
+
+- `repository_id` (optional): Target repository id (default repository if omitted)
+- `issue_id` (required): Issue to append the comment to
+- `notes` (required): Comment text (must contain non-whitespace characters)
+- `private_notes` (optional): Mark comment as private (Redmine permission dependent)
+
+After a successful update the tool retrieves the latest journal entry so you can verify author, timestamp, and visibility.
+
+**Example usage:**
+```
+Add a public handoff comment to issue #77
+Create an internal/private status update for issue #501
+Post deployment notes directly from an MCP client
 ```
 
 ## Development
