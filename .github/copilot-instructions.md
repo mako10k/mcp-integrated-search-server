@@ -29,6 +29,323 @@ This project implements:
 - **HTTP Client**: Axios
 - **Environment**: dotenv for configuration
 
+## Code Quality Principles (CRITICAL)
+
+### 1. Fail-Fast Policy (フェイルファスト方針)
+**Detect and report errors immediately. Never hide problems.**
+
+```typescript
+// ✅ CORRECT: Fail fast with clear error
+function getRepository(id: string): RedmineRepository {
+  const repo = repositories.get(id);
+  if (!repo) {
+    throw new Error(
+      `Repository '${id}' not found. Available: ${Array.from(repositories.keys()).join(', ')}`
+    );
+  }
+  return repo;
+}
+
+// ❌ WRONG: Silent failure
+function getRepository(id: string): RedmineRepository | undefined {
+  return repositories.get(id); // Returns undefined silently
+}
+```
+
+**Rules:**
+- Throw errors for invalid inputs, missing configuration, or unexpected states
+- Use `throw` instead of returning `undefined` or `null` for error conditions
+- Validate inputs at function entry points
+- Never swallow errors in catch blocks without re-throwing or proper handling
+
+### 2. No Silent Fallback Policy (サイレントフォールバック禁止方針)
+**Never use fallback values without explicit user acknowledgment.**
+
+```typescript
+// ✅ CORRECT: Explicit error with guidance
+const apiKey = process.env.REDMINE_API_KEY;
+if (!apiKey) {
+  throw new Error(
+    'REDMINE_API_KEY environment variable is required. ' +
+    'Set it in your .env file or environment.'
+  );
+}
+
+// ❌ WRONG: Silent fallback
+const apiKey = process.env.REDMINE_API_KEY || 'default-key'; // Dangerous!
+
+// ✅ ACCEPTABLE: Explicit fallback with warning
+const timeout = process.env.REQUEST_TIMEOUT 
+  ? parseInt(process.env.REQUEST_TIMEOUT) 
+  : 5000;
+console.warn(`[Config] REQUEST_TIMEOUT not set, using default: ${timeout}ms`);
+```
+
+**Rules:**
+- No default values for critical configuration (API keys, URLs)
+- Fallbacks for optional settings must be logged with `console.warn`
+- User must be informed when fallback behavior is triggered
+- Document all fallback behavior in error messages
+
+### 3. No Backward Compatibility by Default (後方互換は基本無考慮方針)
+**Focus on current requirements. Add compatibility only when explicitly needed.**
+
+```typescript
+// ✅ CORRECT: Clean current implementation
+interface RedmineConfig {
+  configVersion: string;
+  repositories: RedmineRepository[];
+}
+
+// ❌ WRONG: Premature compatibility code
+interface RedmineConfig {
+  configVersion: string;
+  repositories: RedmineRepository[];
+  // Legacy support for old format (not needed yet!)
+  legacyUrl?: string;
+  legacyApiKey?: string;
+}
+```
+
+**Rules:**
+- Design for current requirements only
+- Add compatibility code when migration is actually needed
+- When backward compatibility is required (e.g., legacy env vars), document it clearly
+- Remove deprecated compatibility code after migration period
+
+**Exception:** Current project requires legacy environment variable support (`REDMINE_URL`, `REDMINE_API_KEY`) as explicitly documented. This is intentional compatibility, not accidental complexity.
+
+### 4. Linting Policy (Lint方針)
+**Zero tolerance for lint errors. Warnings must be addressed or justified.**
+
+```typescript
+// ✅ CORRECT: Clean code passing all lint rules
+async function fetchIssue(id: number): Promise<RedmineIssue> {
+  const response = await axios.get(`/issues/${id}.json`);
+  return response.data.issue;
+}
+
+// ❌ WRONG: Disabling lints without justification
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function fetchIssue(id: any): Promise<any> { // Bad!
+  const response = await axios.get(`/issues/${id}.json`);
+  return response.data.issue;
+}
+```
+
+**Rules:**
+- `npm run lint` must pass with zero errors and zero warnings
+- Never commit code with lint errors
+- Lint warnings must be fixed before PR merge
+- Use `eslint-disable` only with explicit justification (see Policy #8)
+- Configure ESLint with strict rules:
+  - `@typescript-eslint/no-explicit-any`: error
+  - `@typescript-eslint/explicit-function-return-type`: warn
+  - `@typescript-eslint/no-unused-vars`: error
+  - `no-console`: off (we use console for MCP server logging)
+
+### 5. Complexity Suppression Policy (複雑度の抑制方針)
+**Keep functions simple. Extract complex logic into smaller units.**
+
+```typescript
+// ✅ CORRECT: Low complexity, clear logic
+function validateApiKey(key: string): ValidationResult {
+  if (key.length < 16) {
+    return { valid: false, error: 'API key too short (min 16 chars)' };
+  }
+  if (PLACEHOLDER_PATTERNS.some(p => p.test(key))) {
+    return { valid: false, error: 'API key appears to be placeholder' };
+  }
+  return { valid: true };
+}
+
+// ❌ WRONG: High complexity, nested conditions
+function processConfig(config: any): ProcessedConfig {
+  if (config) {
+    if (config.repositories) {
+      if (Array.isArray(config.repositories)) {
+        for (const repo of config.repositories) {
+          if (repo.apiKey) {
+            if (repo.apiKey.startsWith('${')) {
+              // ... 10 more levels of nesting
+            }
+          }
+        }
+      }
+    }
+  }
+  // What are we even doing here?
+}
+```
+
+**Rules:**
+- Maximum cyclomatic complexity: 10 per function
+- Maximum nesting depth: 3 levels
+- Functions longer than 50 lines should be refactored
+- Use early returns to reduce nesting
+- Extract complex conditions into named helper functions
+
+**Measurement:**
+```bash
+# Install complexity checker
+npm install --save-dev eslint-plugin-complexity
+
+# Add to .eslintrc.json
+{
+  "rules": {
+    "complexity": ["error", 10],
+    "max-depth": ["error", 3],
+    "max-lines-per-function": ["warn", 50]
+  }
+}
+```
+
+### 6. Early Code Clone Elimination (コードクローンの早期排除方針)
+**Eliminate duplication immediately. Extract common logic before second repetition.**
+
+```typescript
+// ✅ CORRECT: Extract common pattern
+function fetchFromRedmine<T>(
+  repository: RedmineRepository, 
+  endpoint: string
+): Promise<T> {
+  return axios.get(`${repository.url}${endpoint}`, {
+    headers: { 'X-Redmine-API-Key': repository.apiKey }
+  }).then(res => res.data);
+}
+
+// Use for all endpoints
+const issues = await fetchFromRedmine<IssuesResponse>(repo, '/issues.json');
+const projects = await fetchFromRedmine<ProjectsResponse>(repo, '/projects.json');
+
+// ❌ WRONG: Repeated code
+async function fetchIssues(repo: RedmineRepository) {
+  return axios.get(`${repo.url}/issues.json`, {
+    headers: { 'X-Redmine-API-Key': repo.apiKey }
+  }).then(res => res.data);
+}
+
+async function fetchProjects(repo: RedmineRepository) {
+  return axios.get(`${repo.url}/projects.json`, {
+    headers: { 'X-Redmine-API-Key': repo.apiKey }
+  }).then(res => res.data);
+}
+// This is code duplication!
+```
+
+**Rules:**
+- **One Strike Rule**: First time is implementation, second time is duplication - extract it
+- No copy-paste programming - extract into function/class
+- Use generics to handle similar patterns with different types
+- Share validation logic through common schemas
+- Maximum of 5 lines of duplicate code allowed anywhere in codebase
+
+**Detection:**
+```bash
+# Install duplication detector
+npm install --save-dev jscpd
+
+# Run duplication check
+npx jscpd src/
+```
+
+### 7. No Type Assertion Hacks (as unknown as 禁止方針)
+**Never use `as unknown as` to bypass type checking. Fix the types properly.**
+
+```typescript
+// ✅ CORRECT: Proper type handling
+interface ApiResponse<T> {
+  data: T;
+  status: number;
+}
+
+function parseResponse<T>(response: unknown): ApiResponse<T> {
+  // Validate at runtime
+  if (!isObject(response)) {
+    throw new Error('Invalid response: not an object');
+  }
+  if (!('data' in response) || !('status' in response)) {
+    throw new Error('Invalid response: missing required fields');
+  }
+  return response as ApiResponse<T>; // Safe assertion after validation
+}
+
+// ❌ WRONG: Type assertion hack
+const response = apiCall() as unknown as ApiResponse<User>; // Dangerous!
+
+// ❌ WRONG: Bypassing type system
+const config: RedmineConfig = JSON.parse(fileContent) as unknown as RedmineConfig;
+// Use Zod validation instead!
+```
+
+**Rules:**
+- **NEVER** use `as unknown as Type` - it's a code smell
+- Use type guards (`is` predicates) for runtime validation
+- Use Zod schemas for parsing untrusted data
+- If you think you need `as unknown as`, you have a design problem - fix it
+- Single `as` assertions are acceptable only after runtime validation
+
+**Proper Pattern:**
+```typescript
+// Define type guard
+function isRedmineConfig(value: unknown): value is RedmineConfig {
+  return (
+    isObject(value) &&
+    'configVersion' in value &&
+    'repositories' in value
+  );
+}
+
+// Or use Zod (preferred)
+const config = RedmineConfigSchema.parse(JSON.parse(fileContent));
+```
+
+### 8. Explicit Consent for Suppression (Lint抑制などは明示同意方針)
+**Never suppress warnings/errors without documented justification.**
+
+```typescript
+// ✅ CORRECT: Justified suppression with clear comment
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function parseUnknownApiResponse(response: any): RedmineIssue {
+  // Justification: Third-party Redmine API returns untyped JSON.
+  // We validate with Zod schema immediately below.
+  return RedmineIssueSchema.parse(response);
+}
+
+// ❌ WRONG: Suppression without explanation
+// eslint-disable-next-line
+function doSomething(data: any) { // Why is this suppressed?
+  return data.value;
+}
+
+// ❌ WRONG: File-level suppression
+/* eslint-disable @typescript-eslint/no-explicit-any */
+// ... entire file ... // Too broad!
+```
+
+**Rules:**
+- Every lint suppression requires a comment explaining WHY
+- Comment must be on the line immediately before suppression
+- Format: `// Justification: [specific reason]`
+- Suppressions must be reviewed in code review
+- Prefer fixing the issue over suppressing
+- File-level suppressions are prohibited
+- No `@ts-ignore` or `@ts-expect-error` without justification
+
+**Acceptable Justifications:**
+- "Third-party library has incorrect types"
+- "Runtime validation via Zod schema follows"
+- "Performance-critical code with verified safety"
+- "Temporary workaround for [issue-link]"
+
+**Unacceptable Justifications:**
+- "Too hard to fix"
+- "It works"
+- "Legacy code"
+- No comment at all
+
+---
+
 ## Code Style & Standards
 
 ### TypeScript Guidelines
