@@ -13,6 +13,8 @@ import axios from "axios";
 import dotenv from "dotenv";
 import path from "path";
 import { RedmineRepositoryManager } from "./config/redmine-repository-manager";
+import type { RedmineRepository } from "./config/types";
+import { RedmineFieldResolver } from "./redmine/field-resolver";
 
 // 環境変数を読み込み (プロジェクトルートの.envを明示的に指定)
 // CommonJSなので__dirnameは直接使用可能
@@ -166,9 +168,19 @@ const SearchParamsSchema = z.object({
 type SearchParams = z.infer<typeof SearchParamsSchema>;
 
 // Redmine APIパラメータのバリデーションスキーマ
+const RedmineFlexibleIdSchema = z.union([
+  z.number().int().positive(),
+  z.string().min(1),
+]);
+
 const RedmineIssuesParamsSchema = z.object({
-  project_id: z.number().int().positive().optional(),
-  status_id: z.union([z.number().int().positive(), z.literal("open"), z.literal("closed"), z.literal("*")]).optional(),
+  project_id: RedmineFlexibleIdSchema.optional(),
+  status_id: z.union([
+    RedmineFlexibleIdSchema,
+    z.literal("open"),
+    z.literal("closed"),
+    z.literal("*"),
+  ]).optional(),
   assigned_to_id: z.number().int().positive().optional(),
   limit: z.number().int().min(1).max(100).default(25).optional(),
   offset: z.number().int().min(0).default(0).optional(),
@@ -178,12 +190,12 @@ const RedmineIssuesParamsSchema = z.object({
 });
 
 const RedmineCreateIssueSchema = z.object({
-  project_id: z.number().int().positive(),
+  project_id: RedmineFlexibleIdSchema.optional(),
   subject: z.string().min(1, "Subject is required"),
   description: z.string().optional(),
-  tracker_id: z.number().int().positive().optional(),
-  status_id: z.number().int().positive().optional(),
-  priority_id: z.number().int().positive().optional(),
+  tracker_id: RedmineFlexibleIdSchema.optional(),
+  status_id: RedmineFlexibleIdSchema.optional(),
+  priority_id: RedmineFlexibleIdSchema.optional(),
   assigned_to_id: z.number().int().positive().optional(),
   start_date: z.string().optional(),
   due_date: z.string().optional(),
@@ -198,11 +210,11 @@ const RedmineProjectsParamsSchema = z.object({
 // 新しい課題更新用スキーマ
 const RedmineUpdateIssueSchema = z.object({
   issue_id: z.number().int().positive(),
-  status_id: z.number().int().positive().optional(),
+  status_id: RedmineFlexibleIdSchema.optional(),
   assigned_to_id: z.number().int().positive().optional(),
   done_ratio: z.number().min(0).max(100).optional(),
   notes: z.string().optional(),
-  priority_id: z.number().int().positive().optional(),
+  priority_id: RedmineFlexibleIdSchema.optional(),
   due_date: z.string().optional(),
   estimated_hours: z.number().positive().optional(),
   custom_fields: z.array(z.object({
@@ -213,7 +225,7 @@ const RedmineUpdateIssueSchema = z.object({
 
 const RedmineBulkUpdateIssuesSchema = z.object({
   issue_ids: z.array(z.number().int().positive()).min(1),
-  status_id: z.number().int().positive().optional(),
+  status_id: RedmineFlexibleIdSchema.optional(),
   assigned_to_id: z.number().int().positive().optional(),
   notes: z.string().optional(),
 });
@@ -223,6 +235,7 @@ type RedmineCreateIssueParams = z.infer<typeof RedmineCreateIssueSchema>;
 type RedmineUpdateIssueParams = z.infer<typeof RedmineUpdateIssueSchema>;
 type RedmineBulkUpdateIssuesParams = z.infer<typeof RedmineBulkUpdateIssuesSchema>;
 type RedmineProjectsParams = z.infer<typeof RedmineProjectsParamsSchema>;
+type RepoContext = { repo: RedmineRepository; baseUrl: string; headers: Record<string, string> };
 
 class IntegratedSearchServer {
   private server: Server;
@@ -247,17 +260,103 @@ class IntegratedSearchServer {
   }
 
   private readonly repoManager: RedmineRepositoryManager;
+  private readonly fieldResolver = new RedmineFieldResolver();
 
-  private getRepoContext(repositoryId?: string): { baseUrl: string; headers: Record<string, string> } {
+  private getRepoContext(repositoryId?: string): RepoContext {
     const repo = this.repoManager.getRepository(repositoryId);
     const apiKey = this.repoManager.getResolvedApiKey(repo.id);
     return {
+      repo,
       baseUrl: repo.url,
       headers: {
         "Content-Type": "application/json",
         "X-Redmine-API-Key": apiKey,
       },
     };
+  }
+
+  private getDefaultValue(
+    repo: RedmineRepository,
+    field: keyof NonNullable<RedmineRepository["defaults"]>
+  ): number | string | null | undefined {
+    return repo.defaults ? repo.defaults[field] ?? undefined : undefined;
+  }
+
+  private async resolveFieldId(
+    type: "tracker" | "status" | "priority",
+    value: number | string | null | undefined,
+    context: RepoContext,
+    label: string
+  ): Promise<number | undefined> {
+    if (value === undefined || value === null || value === "") {
+      return undefined;
+    }
+
+    try {
+      const options = {
+        value,
+        repositoryId: context.repo.id,
+        baseUrl: context.baseUrl,
+        headers: context.headers,
+        fieldLabel: label,
+      };
+
+      switch (type) {
+        case "tracker":
+          return await this.fieldResolver.resolveTracker(options);
+        case "status":
+          return await this.fieldResolver.resolveStatus(options);
+        case "priority":
+          return await this.fieldResolver.resolvePriority(options);
+        default:
+          return undefined;
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new McpError(ErrorCode.InvalidRequest, message);
+    }
+  }
+
+  private async resolveStatusFilter(
+    value: number | string | null | undefined,
+    context: RepoContext
+  ): Promise<string | number | undefined> {
+    if (value === undefined || value === null || value === "") {
+      return undefined;
+    }
+
+    const normalizedValue = typeof value === "string" ? value.trim() : value;
+    if (normalizedValue === undefined || normalizedValue === null || normalizedValue === "") {
+      return undefined;
+    }
+
+    if (typeof normalizedValue === "string") {
+      const lower = normalizedValue.toLowerCase();
+      if (lower === "open" || lower === "closed") {
+        return lower;
+      }
+      if (normalizedValue === "*") {
+        return "*";
+      }
+    }
+
+    return this.resolveFieldId("status", normalizedValue, context, "Status");
+  }
+
+  private hasValue(value: unknown): value is number | string {
+    if (value === undefined || value === null) {
+      return false;
+    }
+
+    if (typeof value === "string") {
+      return value.trim().length > 0;
+    }
+
+    if (typeof value === "number") {
+      return Number.isFinite(value);
+    }
+
+    return false;
   }
 
   private setupToolHandlers(): void {
@@ -891,7 +990,8 @@ class IntegratedSearchServer {
       const params = RedmineIssuesParamsSchema.parse(args);
       const repoArg = z.object({ repository_id: z.string().optional() }).safeParse(args);
       const repositoryId = repoArg.success ? repoArg.data.repository_id : undefined;
-      const { baseUrl, headers } = this.getRepoContext(repositoryId);
+      const context = this.getRepoContext(repositoryId);
+      const { repo, baseUrl, headers } = context;
       
       const url = `${baseUrl}/issues.json`;
       const queryParams: Record<string, string | number> = {
@@ -899,8 +999,17 @@ class IntegratedSearchServer {
         offset: params.offset || 0,
       };
 
-      if (params.project_id) queryParams.project_id = params.project_id;
-      if (params.status_id !== undefined) queryParams.status_id = params.status_id;
+      const projectValue = params.project_id ?? this.getDefaultValue(repo, "projectId");
+      if (this.hasValue(projectValue)) {
+        queryParams.project_id = projectValue;
+      }
+
+      const statusValue = params.status_id ?? this.getDefaultValue(repo, "statusId");
+      const resolvedStatus = await this.resolveStatusFilter(statusValue, context);
+      if (resolvedStatus !== undefined) {
+        queryParams.status_id = resolvedStatus;
+      }
+
       if (params.assigned_to_id) queryParams.assigned_to_id = params.assigned_to_id;
       if (params.sort) queryParams.sort = params.sort;
       if (params.created_on) queryParams.created_on = params.created_on;
@@ -939,23 +1048,52 @@ class IntegratedSearchServer {
       const params = RedmineCreateIssueSchema.parse(args);
       const repoArg = z.object({ repository_id: z.string().optional() }).safeParse(args);
       const repositoryId = repoArg.success ? repoArg.data.repository_id : undefined;
-      const { baseUrl, headers } = this.getRepoContext(repositoryId);
+      const context = this.getRepoContext(repositoryId);
+      const { repo, baseUrl, headers } = context;
       
       const url = `${baseUrl}/issues.json`;
-      const issueData = {
-        issue: {
-          project_id: params.project_id,
-          subject: params.subject,
-          description: params.description || "",
-          tracker_id: params.tracker_id,
-          status_id: params.status_id,
-          priority_id: params.priority_id,
-          assigned_to_id: params.assigned_to_id,
-          start_date: params.start_date,
-          due_date: params.due_date,
-          estimated_hours: params.estimated_hours,
-        },
+      const projectValue = params.project_id ?? this.getDefaultValue(repo, "projectId");
+      if (!this.hasValue(projectValue)) {
+        throw new McpError(
+          ErrorCode.InvalidRequest,
+          "project_id is required. Provide a value or configure repository defaults."
+        );
+      }
+
+      const trackerId = await this.resolveFieldId(
+        "tracker",
+        params.tracker_id ?? this.getDefaultValue(repo, "trackerId"),
+        context,
+        "Tracker"
+      );
+      const statusId = await this.resolveFieldId(
+        "status",
+        params.status_id ?? this.getDefaultValue(repo, "statusId"),
+        context,
+        "Status"
+      );
+      const priorityId = await this.resolveFieldId(
+        "priority",
+        params.priority_id ?? this.getDefaultValue(repo, "priorityId"),
+        context,
+        "Priority"
+      );
+
+      const issuePayload: Record<string, unknown> = {
+        project_id: projectValue,
+        subject: params.subject,
+        description: params.description ?? "",
       };
+
+      if (trackerId !== undefined) issuePayload.tracker_id = trackerId;
+      if (statusId !== undefined) issuePayload.status_id = statusId;
+      if (priorityId !== undefined) issuePayload.priority_id = priorityId;
+      if (params.assigned_to_id) issuePayload.assigned_to_id = params.assigned_to_id;
+      if (params.start_date) issuePayload.start_date = params.start_date;
+      if (params.due_date) issuePayload.due_date = params.due_date;
+      if (params.estimated_hours) issuePayload.estimated_hours = params.estimated_hours;
+
+      const issueData = { issue: issuePayload };
 
       this.log("debug", `Creating Redmine issue:`, issueData);
 
@@ -1280,7 +1418,8 @@ class IntegratedSearchServer {
       const params = RedmineUpdateIssueSchema.parse(args);
       const repoArg = z.object({ repository_id: z.string().optional() }).safeParse(args);
       const repositoryId = repoArg.success ? repoArg.data.repository_id : undefined;
-      const { baseUrl, headers } = this.getRepoContext(repositoryId);
+      const context = this.getRepoContext(repositoryId);
+      const { baseUrl, headers } = context;
       const url = `${baseUrl}/issues/${params.issue_id}.json`;
       
       // 更新前の状態を取得
@@ -1293,11 +1432,18 @@ class IntegratedSearchServer {
       // 更新データの構築
       const updateData: any = { issue: {} };
       
-      if (params.status_id !== undefined) updateData.issue.status_id = params.status_id;
+      const resolvedStatusId = params.status_id !== undefined
+        ? await this.resolveFieldId("status", params.status_id, context, "Status")
+        : undefined;
+      const resolvedPriorityId = params.priority_id !== undefined
+        ? await this.resolveFieldId("priority", params.priority_id, context, "Priority")
+        : undefined;
+
+      if (resolvedStatusId !== undefined) updateData.issue.status_id = resolvedStatusId;
       if (params.assigned_to_id !== undefined) updateData.issue.assigned_to_id = params.assigned_to_id;
       if (params.done_ratio !== undefined) updateData.issue.done_ratio = params.done_ratio;
       if (params.notes !== undefined) updateData.issue.notes = params.notes;
-      if (params.priority_id !== undefined) updateData.issue.priority_id = params.priority_id;
+      if (resolvedPriorityId !== undefined) updateData.issue.priority_id = resolvedPriorityId;
       if (params.due_date !== undefined) updateData.issue.due_date = params.due_date;
       if (params.estimated_hours !== undefined) updateData.issue.estimated_hours = params.estimated_hours;
       if (params.custom_fields !== undefined) updateData.issue.custom_fields = params.custom_fields;
@@ -1322,8 +1468,8 @@ class IntegratedSearchServer {
       const warnings: string[] = [];
       
       // ステータスの確認
-      if (params.status_id !== undefined) {
-        if (afterIssue.status.id === params.status_id) {
+      if (resolvedStatusId !== undefined) {
+        if (afterIssue.status.id === resolvedStatusId) {
           successful.push(`Status: ${beforeIssue.status.name} → ${afterIssue.status.name}`);
         } else {
           failed.push(`Status: ${beforeIssue.status.name} (ワークフロー制限により変更不可)`);
@@ -1353,8 +1499,8 @@ class IntegratedSearchServer {
       }
       
       // 優先度の確認
-      if (params.priority_id !== undefined) {
-        if (afterIssue.priority.id === params.priority_id) {
+      if (resolvedPriorityId !== undefined) {
+        if (afterIssue.priority.id === resolvedPriorityId) {
           successful.push(`Priority: ${beforeIssue.priority.name} → ${afterIssue.priority.name}`);
         } else {
           failed.push(`Priority: ${beforeIssue.priority.name} (変更制限あり)`);
@@ -1433,7 +1579,12 @@ class IntegratedSearchServer {
       const params = RedmineBulkUpdateIssuesSchema.parse(args);
       const repoArg = z.object({ repository_id: z.string().optional() }).safeParse(args);
       const repositoryId = repoArg.success ? repoArg.data.repository_id : undefined;
-      const { baseUrl, headers } = this.getRepoContext(repositoryId);
+      const context = this.getRepoContext(repositoryId);
+      const { baseUrl, headers } = context;
+
+      const resolvedStatusId = params.status_id !== undefined
+        ? await this.resolveFieldId("status", params.status_id, context, "Status")
+        : undefined;
       
       const updates: string[] = [];
       const failures: string[] = [];
@@ -1446,7 +1597,7 @@ class IntegratedSearchServer {
           // 更新データの構築
           const updateData: any = { issue: {} };
           
-          if (params.status_id !== undefined) updateData.issue.status_id = params.status_id;
+          if (resolvedStatusId !== undefined) updateData.issue.status_id = resolvedStatusId;
           if (params.assigned_to_id !== undefined) updateData.issue.assigned_to_id = params.assigned_to_id;
           if (params.notes !== undefined) updateData.issue.notes = params.notes;
 
@@ -1472,7 +1623,7 @@ class IntegratedSearchServer {
         
         // 更新内容の詳細
         const updateDetails: string[] = [];
-        if (params.status_id !== undefined) updateDetails.push(`Status ID: ${params.status_id}`);
+        if (resolvedStatusId !== undefined) updateDetails.push(`Status ID: ${resolvedStatusId}`);
         if (params.assigned_to_id !== undefined) updateDetails.push(`Assigned to User ID: ${params.assigned_to_id}`);
         if (params.notes !== undefined) updateDetails.push(`Notes: ${params.notes}`);
         
