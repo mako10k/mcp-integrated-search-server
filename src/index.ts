@@ -25,7 +25,7 @@ dotenv.config({ path: path.join(projectRoot, '.env') });
 if (!process.env.REDMINE_CONFIG_PATH) {
   const defaultConfigPath = path.join(projectRoot, 'redmine-repositories.local.json');
   process.env.REDMINE_CONFIG_PATH = defaultConfigPath;
-  console.log(`[IntegratedSearchServer] REDMINE_CONFIG_PATH not set, using: ${defaultConfigPath}`);
+  console.error(`[IntegratedSearchServer] REDMINE_CONFIG_PATH not set, using: ${defaultConfigPath}`);
 }
 
 // 環境変数のバリデーション
@@ -461,15 +461,21 @@ class IntegratedSearchServer {
                 description: "Optional repository ID. Defaults to configured default repository.",
               },
               project_id: {
-                type: "number",
-                description: "Project ID to filter issues (optional)",
+                oneOf: [
+                  { type: "number", description: "Project numeric ID" },
+                  { type: "string", description: "Project identifier (string)" },
+                ],
+                description: "Project to filter issues (optional; defaults to repository setting if omitted)",
               },
               status_id: {
                 oneOf: [
                   { type: "number", description: "Specific status ID" },
-                  { type: "string", enum: ["open", "closed", "*"], description: "Status filter: open, closed, or * for all" }
+                  {
+                    type: "string",
+                    description: "Status name/partial match (e.g., '進行'). Also supports special tokens open, closed, *",
+                  },
                 ],
-                description: "Status filter for issues (optional)",
+                description: "Status filter for issues (optional; defaults to repository setting if omitted)",
               },
               assigned_to_id: {
                 type: "number",
@@ -507,8 +513,11 @@ class IntegratedSearchServer {
                 description: "Optional repository ID. Defaults to configured default repository.",
               },
               project_id: {
-                type: "number",
-                description: "Project ID where the issue will be created",
+                oneOf: [
+                  { type: "number", description: "Project numeric ID" },
+                  { type: "string", description: "Project identifier (string)" },
+                ],
+                description: "Project where the issue will be created (optional when repository default is configured)",
               },
               subject: {
                 type: "string",
@@ -519,16 +528,25 @@ class IntegratedSearchServer {
                 description: "Issue description (optional)",
               },
               tracker_id: {
-                type: "number",
-                description: "Tracker ID (optional, defaults to project default)",
+                oneOf: [
+                  { type: "number", description: "Tracker numeric ID" },
+                  { type: "string", description: "Tracker name or partial name" },
+                ],
+                description: "Tracker (optional, defaults to repository setting)",
               },
               status_id: {
-                type: "number",
-                description: "Status ID (optional, defaults to project default)",
+                oneOf: [
+                  { type: "number", description: "Status numeric ID" },
+                  { type: "string", description: "Status name or partial name" },
+                ],
+                description: "Status (optional, defaults to repository setting)",
               },
               priority_id: {
-                type: "number",
-                description: "Priority ID (optional, defaults to normal)",
+                oneOf: [
+                  { type: "number", description: "Priority numeric ID" },
+                  { type: "string", description: "Priority name or partial name" },
+                ],
+                description: "Priority (optional, defaults to repository setting)",
               },
               assigned_to_id: {
                 type: "number",
@@ -547,7 +565,7 @@ class IntegratedSearchServer {
                 description: "Estimated hours (optional)",
               },
             },
-            required: ["project_id", "subject"],
+            required: ["subject"],
           },
         },
         {
@@ -626,8 +644,11 @@ class IntegratedSearchServer {
                 description: "Issue ID to update",
               },
               status_id: {
-                type: "number",
-                description: "New status ID (optional)",
+                oneOf: [
+                  { type: "number", description: "Status numeric ID" },
+                  { type: "string", description: "Status name or partial name" },
+                ],
+                description: "New status (optional)",
               },
               assigned_to_id: {
                 type: "number",
@@ -644,8 +665,11 @@ class IntegratedSearchServer {
                 description: "Comment/notes to add (optional)",
               },
               priority_id: {
-                type: "number",
-                description: "New priority ID (optional)",
+                oneOf: [
+                  { type: "number", description: "Priority numeric ID" },
+                  { type: "string", description: "Priority name or partial name" },
+                ],
+                description: "New priority (optional)",
               },
               due_date: {
                 type: "string",
@@ -697,8 +721,11 @@ class IntegratedSearchServer {
                 minItems: 1,
               },
               status_id: {
-                type: "number",
-                description: "New status ID for all issues (optional)",
+                oneOf: [
+                  { type: "number", description: "Status numeric ID" },
+                  { type: "string", description: "Status name or partial name" },
+                ],
+                description: "New status for all issues (optional)",
               },
               assigned_to_id: {
                 type: "number",

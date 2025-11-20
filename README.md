@@ -200,8 +200,8 @@ List and filter Redmine issues.
 
 **Parameters:**
 - `repository_id` (optional): Target repository id (default repository if omitted)
-- `project_id` (optional): Project ID to filter issues
-- `status_id` (optional): Status ID or 'open', 'closed', '*' for all
+- `project_id` (optional): Project ID or identifier (defaults to repository setting when omitted)
+- `status_id` (optional): Status ID, status name/partial match, or `open`/`closed`/`*`
 - `assigned_to_id` (optional): User ID of the assignee
 - `limit` (optional): Number of issues to return (1-100, default: 25)
 - `offset` (optional): Starting index for pagination (default: 0)
@@ -220,14 +220,13 @@ List issues assigned to user 5
 
 Create a new Redmine issue.
 
-**Parameters:**
 - `repository_id` (optional): Target repository id (default repository if omitted)
-- `project_id` (required): Project ID where to create the issue
+- `project_id` (optional): Project ID or identifier (uses repository default when omitted)
 - `subject` (required): Issue subject/title
 - `description` (optional): Issue description
-- `tracker_id` (optional): Tracker ID (Bug, Feature, etc.)
-- `status_id` (optional): Initial status ID
-- `priority_id` (optional): Priority ID
+- `tracker_id` (optional): Tracker ID or name (partial match allowed)
+- `status_id` (optional): Status ID or name (partial match allowed)
+- `priority_id` (optional): Priority ID or name (partial match allowed)
 - `assigned_to_id` (optional): User ID to assign the issue to
 - `start_date` (optional): Start date (YYYY-MM-DD)
 - `due_date` (optional): Due date (YYYY-MM-DD)
@@ -274,13 +273,12 @@ Get full issue information including relations
 
 Update an existing Redmine issue with detailed analysis reporting.
 
-**Parameters:**
 - `issue_id` (required): The ID of the issue to update
-- `status_id` (optional): New status ID (may be restricted by workflow)
+- `status_id` (optional): New status ID or name (workflow restrictions still apply)
 - `assigned_to_id` (optional): New assignee user ID
 - `done_ratio` (optional): Progress percentage (0-100)
 - `notes` (optional): Comment/notes to add
-- `priority_id` (optional): New priority ID
+- `priority_id` (optional): New priority ID or name
 - `due_date` (optional): Due date (YYYY-MM-DD format)
 - `estimated_hours` (optional): Estimated hours
 - `custom_fields` (optional): Array of custom field updates
@@ -302,9 +300,8 @@ Change assignee and due date for issue #789
 
 Update multiple Redmine issues at once.
 
-**Parameters:**
 - `issue_ids` (required): Array of issue IDs to update
-- `status_id` (optional): New status ID for all issues
+- `status_id` (optional): New status ID or name for all issues
 - `assigned_to_id` (optional): New assignee user ID for all issues
 - `notes` (optional): Comment/notes to add to all issues
 
